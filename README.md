@@ -62,6 +62,20 @@ open WallSpan.app
 cp -r WallSpan.app /Applications/
 ```
 
+## Start on Login
+
+To have WallSpan launch automatically when you log in:
+
+**Via System Settings:**
+1. Open **System Settings** → **General** → **Login Items & Extensions**
+2. Click **+** under "Open at Login"
+3. Select `WallSpan` from Applications and add it
+
+**Via command line:**
+```bash
+osascript -e 'tell application "System Events" to make login item at end with properties {path:"/Applications/WallSpan.app", hidden:true}'
+```
+
 ## Installing on Another Mac
 
 ### Option A: Clone and run (no Xcode required)
