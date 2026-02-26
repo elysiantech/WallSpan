@@ -1,19 +1,41 @@
 import AppKit
 
 enum ScreenGeometry {
-    /// Returns the combined pixel width across all screens, capped at 5120.
-    static func combinedPixelWidth() -> Int {
+    /// Returns the combined bounding box dimensions across all screens in pixels.
+    static func combinedDimensions() -> (width: Int, height: Int) {
         let screens = NSScreen.screens
-        guard !screens.isEmpty else { return 3840 }
+        guard !screens.isEmpty else { return (3840, 2160) }
 
-        var minX = CGFloat.infinity, maxX = -CGFloat.infinity
+        var minX = CGFloat.infinity, minY = CGFloat.infinity
+        var maxX = -CGFloat.infinity, maxY = -CGFloat.infinity
         for screen in screens {
-            minX = min(minX, screen.frame.minX)
-            maxX = max(maxX, screen.frame.maxX)
+            let f = screen.frame
+            minX = min(minX, f.minX)
+            minY = min(minY, f.minY)
+            maxX = max(maxX, f.maxX)
+            maxY = max(maxY, f.maxY)
         }
-        let totalPoints = maxX - minX
-        let pixels = Int(totalPoints * 2.0)
-        return min(pixels, 5120)
+        let totalWidth = Int((maxX - minX) * 2.0)
+        let totalHeight = Int((maxY - minY) * 2.0)
+        return (totalWidth, totalHeight)
+    }
+
+    /// Returns "landscape", "portrait", or "squarish" based on screen arrangement.
+    static func orientation() -> String {
+        let dims = combinedDimensions()
+        let ratio = Double(dims.width) / Double(dims.height)
+        if ratio > 1.2 {
+            return "landscape"
+        } else if ratio < 0.83 {
+            return "portrait"
+        } else {
+            return "squarish"
+        }
+    }
+
+    /// Returns the combined pixel width across all screens (legacy, for compatibility).
+    static func combinedPixelWidth() -> Int {
+        return combinedDimensions().width
     }
 }
 

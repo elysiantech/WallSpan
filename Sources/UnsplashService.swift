@@ -22,7 +22,10 @@ class UnsplashService {
             return
         }
 
-        let urlString = "https://api.unsplash.com/photos/random?query=\(query)&orientation=landscape&content_filter=high"
+        // Auto-detect orientation based on screen arrangement
+        let orientation = ScreenGeometry.orientation()
+        let orientationParam = orientation == "squarish" ? "squarish" : orientation
+        let urlString = "https://api.unsplash.com/photos/random?query=\(query)&orientation=\(orientationParam)&content_filter=high"
         guard let url = URL(string: urlString) else {
             completion(.failure(WallSpanError.invalidURL))
             return
@@ -62,9 +65,10 @@ class UnsplashService {
                     return
                 }
 
-                // Request high resolution scaled to the user's actual screen span
-                let totalWidth = ScreenGeometry.combinedPixelWidth()
-                let imageURLString = rawURL + "&w=\(totalWidth)&q=85&fm=jpg"
+                // Request full resolution image with maximum quality
+                let dims = ScreenGeometry.combinedDimensions()
+                let maxDim = max(dims.width, dims.height)
+                let imageURLString = rawURL + "&w=\(maxDim)&q=100&fm=jpg"
                 guard let imageURL = URL(string: imageURLString) else {
                     completion(.failure(WallSpanError.invalidURL))
                     return
