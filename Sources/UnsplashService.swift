@@ -3,6 +3,7 @@ import Foundation
 struct UnsplashPhoto {
     let id: String
     let imageURL: URL
+    let thumbnailURL: URL
     let photographer: String
     let photographerURL: String
 }
@@ -55,6 +56,7 @@ class UnsplashService {
                 guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                       let urls = json["urls"] as? [String: Any],
                       let rawURL = urls["raw"] as? String,
+                      let smallURL = urls["small"] as? String,
                       let user = json["user"] as? [String: Any],
                       let name = user["name"] as? String,
                       let links = user["links"] as? [String: Any],
@@ -69,7 +71,8 @@ class UnsplashService {
                 let dims = ScreenGeometry.combinedDimensions()
                 let maxDim = max(dims.width, dims.height)
                 let imageURLString = rawURL + "&w=\(maxDim)&q=100&fm=jpg"
-                guard let imageURL = URL(string: imageURLString) else {
+                guard let imageURL = URL(string: imageURLString),
+                      let thumbnailURL = URL(string: smallURL) else {
                     completion(.failure(WallSpanError.invalidURL))
                     return
                 }
@@ -77,6 +80,7 @@ class UnsplashService {
                 let photo = UnsplashPhoto(
                     id: id,
                     imageURL: imageURL,
+                    thumbnailURL: thumbnailURL,
                     photographer: name,
                     photographerURL: htmlLink
                 )
