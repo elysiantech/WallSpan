@@ -6,6 +6,7 @@ class PreferencesWindow: NSObject {
     private var window: NSWindow?
     private var apiKeyField: NSTextField!
     private var intervalPopup: NSPopUpButton!
+    private var displayModePopup: NSPopUpButton!
     private var searchTermsView: NSTextView!
 
     private let intervalOptions: [(String, TimeInterval)] = [
@@ -24,7 +25,7 @@ class PreferencesWindow: NSObject {
         }
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 480, height: 420),
+            contentRect: NSRect(x: 0, y: 0, width: 480, height: 480),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
@@ -37,7 +38,7 @@ class PreferencesWindow: NSObject {
         content.autoresizingMask = [.width, .height]
         window.contentView = content
 
-        var y = 380
+        var y = 440
 
         // API Key
         let apiLabel = NSTextField(labelWithString: "Unsplash API Key:")
@@ -73,6 +74,25 @@ class PreferencesWindow: NSObject {
             intervalPopup.selectItem(at: 1)
         }
         content.addSubview(intervalPopup)
+        y -= 36
+
+        // Display mode
+        let modeLabel = NSTextField(labelWithString: "Display Mode:")
+        modeLabel.frame = NSRect(x: 20, y: y, width: 200, height: 18)
+        content.addSubview(modeLabel)
+        y -= 28
+
+        displayModePopup = NSPopUpButton(frame: NSRect(x: 20, y: y, width: 200, height: 24))
+        displayModePopup.addItems(withTitles: ["Span (one image across all)", "Individual (per monitor)"])
+        displayModePopup.selectItem(at: Preferences.shared.displayMode == .span ? 0 : 1)
+        content.addSubview(displayModePopup)
+        y -= 16
+
+        let modeHint = NSTextField(labelWithString: "Individual mode fetches separate images for best quality")
+        modeHint.frame = NSRect(x: 20, y: y, width: 440, height: 14)
+        modeHint.font = NSFont.systemFont(ofSize: 11)
+        modeHint.textColor = .secondaryLabelColor
+        content.addSubview(modeHint)
         y -= 36
 
         // Search terms
@@ -123,9 +143,12 @@ class PreferencesWindow: NSObject {
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
 
+        let displayMode: DisplayMode = displayModePopup.indexOfSelectedItem == 0 ? .span : .individual
+
         // Write all at once, notification fires on last write
         Preferences.shared.apiKey = apiKeyField.stringValue.trimmingCharacters(in: .whitespaces)
         Preferences.shared.rotationInterval = interval
+        Preferences.shared.displayMode = displayMode
         Preferences.shared.searchTerms = terms
 
         window?.close()

@@ -313,48 +313,116 @@ class StatusBarController: NSObject, NSMenuDelegate {
         isLoading = true
         lastError = nil
 
-        NSLog("[WallSpan] Applying wallpaper by %@", preview.photo.photographer)
-        wallpaperManager.applyWallpaper(from: preview.photo.imageURL) { [weak self] error in
-            DispatchQueue.main.async {
-                self?.isLoading = false
-                if let error = error {
-                    NSLog("[WallSpan] Wallpaper error: %@", error.localizedDescription)
-                    self?.lastError = "Error: \(error.localizedDescription)"
-                } else {
-                    NSLog("[WallSpan] Wallpaper set successfully")
-                    self?.appliedCredit = preview.photo.photographer
+        if Preferences.shared.displayMode == .individual {
+            // Individual mode: fetch separate images for each monitor
+            let screenCount = NSScreen.screens.count
+            NSLog("[WallSpan] Individual mode: fetching %d images for %d monitors", screenCount, screenCount)
+
+            unsplashService.fetchMultiplePhotos(count: screenCount) { [weak self] result in
+                guard let self = self else { return }
+
+                switch result {
+                case .success(let photos):
+                    let urls = photos.map { $0.imageURL }
+                    let credits = photos.map { $0.photographer }.joined(separator: ", ")
+                    NSLog("[WallSpan] Applying %d wallpapers", photos.count)
+
+                    self.wallpaperManager.applyIndividualWallpapers(from: urls) { error in
+                        DispatchQueue.main.async {
+                            self.isLoading = false
+                            if let error = error {
+                                NSLog("[WallSpan] Wallpaper error: %@", error.localizedDescription)
+                                self.lastError = "Error: \(error.localizedDescription)"
+                            } else {
+                                NSLog("[WallSpan] Wallpapers set successfully")
+                                self.appliedCredit = credits
+                            }
+                        }
+                    }
+                case .failure(let error):
+                    DispatchQueue.main.async {
+                        self.isLoading = false
+                        self.lastError = "Error: \(error.localizedDescription)"
+                    }
+                }
+            }
+        } else {
+            // Span mode: single image across all monitors
+            NSLog("[WallSpan] Span mode: applying wallpaper by %@", preview.photo.photographer)
+            wallpaperManager.applyWallpaper(from: preview.photo.imageURL) { [weak self] error in
+                DispatchQueue.main.async {
+                    self?.isLoading = false
+                    if let error = error {
+                        NSLog("[WallSpan] Wallpaper error: %@", error.localizedDescription)
+                        self?.lastError = "Error: \(error.localizedDescription)"
+                    } else {
+                        NSLog("[WallSpan] Wallpaper set successfully")
+                        self?.appliedCredit = preview.photo.photographer
+                    }
                 }
             }
         }
     }
 
-    /// Auto-rotate: fetch and apply directly (legacy behavior for timer)
+    /// Auto-rotate: fetch and apply directly
     private func autoRotate() {
         guard !isLoading else { return }
         isLoading = true
         lastError = nil
 
-        unsplashService.fetchRandomPhoto { [weak self] result in
-            guard let self = self else { return }
+        if Preferences.shared.displayMode == .individual {
+            let screenCount = NSScreen.screens.count
+            unsplashService.fetchMultiplePhotos(count: screenCount) { [weak self] result in
+                guard let self = self else { return }
 
-            switch result {
-            case .success(let photo):
-                // Add to buffer for history
-                self.downloadThumbnail(for: photo)
-                self.wallpaperManager.applyWallpaper(from: photo.imageURL) { error in
-                    DispatchQueue.main.async {
-                        self.isLoading = false
-                        if let error = error {
-                            self.lastError = "Error: \(error.localizedDescription)"
-                        } else {
-                            self.appliedCredit = photo.photographer
+                switch result {
+                case .success(let photos):
+                    let urls = photos.map { $0.imageURL }
+                    let credits = photos.map { $0.photographer }.joined(separator: ", ")
+                    // Add first photo to buffer for preview history
+                    if let first = photos.first {
+                        self.downloadThumbnail(for: first)
+                    }
+                    self.wallpaperManager.applyIndividualWallpapers(from: urls) { error in
+                        DispatchQueue.main.async {
+                            self.isLoading = false
+                            if let error = error {
+                                self.lastError = "Error: \(error.localizedDescription)"
+                            } else {
+                                self.appliedCredit = credits
+                            }
                         }
                     }
+                case .failure(let error):
+                    DispatchQueue.main.async {
+                        self.isLoading = false
+                        self.lastError = "Error: \(error.localizedDescription)"
+                    }
                 }
-            case .failure(let error):
-                DispatchQueue.main.async {
-                    self.isLoading = false
-                    self.lastError = "Error: \(error.localizedDescription)"
+            }
+        } else {
+            unsplashService.fetchRandomPhoto { [weak self] result in
+                guard let self = self else { return }
+
+                switch result {
+                case .success(let photo):
+                    // Add to buffer for history
+                    self.downloadThumbnail(for: photo)
+                    self.wallpaperManager.applyWallpaper(from: photo.imageURL) { error in
+                        DispatchQueue.main.async {
+                            self.isLoading = false
+                            if let error = error {
+                                self.lastError = "Error: \(error.localizedDescription)"
+                            } else {
+                                self.appliedCredit = photo.photographer
+                            }
+                        }
+                    }
+                case .failure(let error):
+                    DispatchQueue.main.async {
+                        self.isLoading = false
+                        self.lastError = "Error: \(error.localizedDescription)"
+                    }
                 }
             }
         }

@@ -98,6 +98,70 @@ class WallpaperManager {
         }.resume()
     }
 
+    /// Downloads separate images and applies one to each screen (individual mode).
+    func applyIndividualWallpapers(from urls: [URL], completion: @escaping (Error?) -> Void) {
+        let screens = NSScreen.screens
+        guard !screens.isEmpty else {
+            completion(WallSpanError.noScreens)
+            return
+        }
+
+        let group = DispatchGroup()
+        var images: [Int: NSImage] = [:]
+        var downloadError: Error?
+
+        for (index, url) in urls.enumerated() {
+            group.enter()
+            downloadSession.dataTask(with: url) { data, _, error in
+                defer { group.leave() }
+                if let error = error {
+                    downloadError = error
+                    return
+                }
+                guard let data = data, let image = NSImage(data: data) else {
+                    downloadError = WallSpanError.noData
+                    return
+                }
+                DispatchQueue.main.async {
+                    images[index] = image
+                }
+            }.resume()
+        }
+
+        group.notify(queue: .main) { [weak self] in
+            if let error = downloadError {
+                completion(error)
+                return
+            }
+
+            do {
+                try self?.applyToIndividualScreens(images: images)
+                completion(nil)
+            } catch {
+                completion(error)
+            }
+        }
+    }
+
+    /// Applies separate images to each screen without spanning.
+    private func applyToIndividualScreens(images: [Int: NSImage]) throws {
+        let screens = NSScreen.screens
+        guard !screens.isEmpty else { throw WallSpanError.noScreens }
+
+        let tag = rotateTag()
+
+        for (index, screen) in screens.enumerated() {
+            guard let image = images[index] else { continue }
+
+            let fileURL = supportDir.appendingPathComponent("wallpaper_\(tag)_\(index).jpg")
+            try saveImage(image, to: fileURL)
+            try NSWorkspace.shared.setDesktopImageURL(fileURL, for: screen, options: [
+                .imageScaling: NSImageScaling.scaleProportionallyUpOrDown.rawValue,
+                .allowClipping: true
+            ])
+        }
+    }
+
     // MARK: - Multi-monitor spanning
 
     private func spanAcrossScreens(image: NSImage) throws {

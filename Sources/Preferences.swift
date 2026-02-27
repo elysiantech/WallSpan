@@ -1,5 +1,10 @@
 import Foundation
 
+enum DisplayMode: String {
+    case span = "span"
+    case individual = "individual"
+}
+
 class Preferences {
     static let shared = Preferences()
 
@@ -11,6 +16,17 @@ class Preferences {
         get { defaults.string(forKey: "unsplashAPIKey") ?? "" }
         set {
             defaults.set(newValue, forKey: "unsplashAPIKey")
+            NotificationCenter.default.post(name: Self.changedNotification, object: nil)
+        }
+    }
+
+    var displayMode: DisplayMode {
+        get {
+            let raw = defaults.string(forKey: "displayMode") ?? "span"
+            return DisplayMode(rawValue: raw) ?? .span
+        }
+        set {
+            defaults.set(newValue.rawValue, forKey: "displayMode")
             NotificationCenter.default.post(name: Self.changedNotification, object: nil)
         }
     }
