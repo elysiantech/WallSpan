@@ -1,8 +1,12 @@
 import AppKit
 
 struct PhotoPreview {
-    let photo: UnsplashPhoto
-    let thumbnail: NSImage
+    let photos: [UnsplashPhoto]      // 1 for span mode, N for individual mode
+    let thumbnails: [NSImage]        // corresponding thumbnails
+
+    var primaryPhoto: UnsplashPhoto { photos[0] }
+    var primaryThumbnail: NSImage { thumbnails[0] }
+    var isMultiple: Bool { photos.count > 1 }
 }
 
 class StatusBarController: NSObject, NSMenuDelegate {
@@ -52,7 +56,13 @@ class StatusBarController: NSObject, NSMenuDelegate {
         if previewIndex >= 0 && previewIndex < previewBuffer.count {
             let preview = previewBuffer[previewIndex]
             let previewItem = NSMenuItem()
-            let previewView = createPreviewView(image: preview.thumbnail, credit: "📷 \(preview.photo.photographer)")
+            let previewView: NSView
+            if preview.isMultiple {
+                let credits = preview.photos.map { $0.photographer }.joined(separator: ", ")
+                previewView = createMultiPreviewView(thumbnails: preview.thumbnails, credit: "📷 \(credits)")
+            } else {
+                previewView = createPreviewView(image: preview.primaryThumbnail, credit: "📷 \(preview.primaryPhoto.photographer)")
+            }
             previewItem.view = previewView
             menu.addItem(previewItem)
 
@@ -180,6 +190,79 @@ class StatusBarController: NSObject, NSMenuDelegate {
         return container
     }
 
+    private func createMultiPreviewView(thumbnails: [NSImage], credit: String) -> NSView {
+        let count = thumbnails.count
+        let thumbWidth = 260 / count - (count > 1 ? 5 : 0)
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 280, height: 160))
+
+        // Show thumbnails side by side
+        for (i, thumb) in thumbnails.enumerated() {
+            let x = 10 + i * (thumbWidth + 5)
+            let imageView = NSImageView(frame: NSRect(x: x, y: 30, width: thumbWidth, height: 120))
+            imageView.image = thumb
+            imageView.imageScaling = .scaleProportionallyUpOrDown
+            imageView.wantsLayer = true
+            imageView.layer?.cornerRadius = 6
+            imageView.layer?.masksToBounds = true
+            imageView.layer?.borderWidth = 1
+            imageView.layer?.borderColor = NSColor.white.withAlphaComponent(0.3).cgColor
+            container.addSubview(imageView)
+        }
+
+        // Previous button (left arrow) - only if there's history
+        if previewIndex > 0 {
+            let prevButton = NSButton(frame: NSRect(x: 15, y: 75, width: 30, height: 30))
+            prevButton.image = NSImage(systemSymbolName: "chevron.left.circle.fill", accessibilityDescription: "Previous")
+            prevButton.imageScaling = .scaleProportionallyUpOrDown
+            prevButton.isBordered = false
+            prevButton.wantsLayer = true
+            prevButton.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.4).cgColor
+            prevButton.layer?.cornerRadius = 15
+            prevButton.contentTintColor = .white
+            prevButton.target = self
+            prevButton.action = #selector(previousPreview)
+            container.addSubview(prevButton)
+        }
+
+        // Next button (right arrow) - always visible
+        let nextButton = NSButton(frame: NSRect(x: 235, y: 75, width: 30, height: 30))
+        nextButton.image = NSImage(systemSymbolName: "chevron.right.circle.fill", accessibilityDescription: "Next")
+        nextButton.imageScaling = .scaleProportionallyUpOrDown
+        nextButton.isBordered = false
+        nextButton.wantsLayer = true
+        nextButton.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.4).cgColor
+        nextButton.layer?.cornerRadius = 15
+        nextButton.contentTintColor = .white
+        nextButton.target = self
+        nextButton.action = #selector(nextOrFetchPreview)
+        nextButton.isEnabled = !isLoading
+        container.addSubview(nextButton)
+
+        // Credit bar at bottom
+        let labelBg = NSView(frame: NSRect(x: 10, y: 10, width: 260, height: 22))
+        labelBg.wantsLayer = true
+        labelBg.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.5).cgColor
+        labelBg.layer?.cornerRadius = 4
+        container.addSubview(labelBg)
+
+        let label = NSTextField(labelWithString: credit)
+        label.frame = NSRect(x: 15, y: 12, width: 180, height: 16)
+        label.font = NSFont.systemFont(ofSize: 10, weight: .medium)
+        label.textColor = .white
+        label.alignment = .left
+        label.lineBreakMode = .byTruncatingTail
+        container.addSubview(label)
+
+        let posLabel = NSTextField(labelWithString: "\(previewIndex + 1)/\(previewBuffer.count)")
+        posLabel.frame = NSRect(x: 200, y: 12, width: 60, height: 16)
+        posLabel.font = NSFont.systemFont(ofSize: 10, weight: .medium)
+        posLabel.textColor = .white.withAlphaComponent(0.7)
+        posLabel.alignment = .right
+        container.addSubview(posLabel)
+
+        return container
+    }
+
     // MARK: - Actions
 
     @objc private func fetchNewPreview() {
@@ -187,18 +270,44 @@ class StatusBarController: NSObject, NSMenuDelegate {
         isLoading = true
         lastError = nil
 
-        NSLog("[WallSpan] Fetching preview...")
-        unsplashService.fetchRandomPhoto { [weak self] result in
-            guard let self = self else { return }
+        if Preferences.shared.displayMode == .individual {
+            let screenCount = NSScreen.screens.count
+            NSLog("[WallSpan] Fetching %d previews for individual mode...", screenCount)
+            unsplashService.fetchMultiplePhotos(count: screenCount) { [weak self] result in
+                guard let self = self else { return }
 
-            switch result {
-            case .success(let photo):
-                NSLog("[WallSpan] Got photo by %@, fetching thumbnail", photo.photographer)
-                self.downloadThumbnail(for: photo)
-            case .failure(let error):
-                DispatchQueue.main.async {
-                    self.isLoading = false
-                    self.lastError = "Error: \(error.localizedDescription)"
+                switch result {
+                case .success(let photos):
+                    NSLog("[WallSpan] Got %d photos, fetching thumbnails", photos.count)
+                    self.downloadThumbnails(for: photos) { thumbnails in
+                        if let thumbnails = thumbnails {
+                            self.addPreview(PhotoPreview(photos: photos, thumbnails: thumbnails))
+                        } else {
+                            self.lastError = "Failed to load thumbnails"
+                        }
+                        self.isLoading = false
+                    }
+                case .failure(let error):
+                    DispatchQueue.main.async {
+                        self.isLoading = false
+                        self.lastError = "Error: \(error.localizedDescription)"
+                    }
+                }
+            }
+        } else {
+            NSLog("[WallSpan] Fetching preview...")
+            unsplashService.fetchRandomPhoto { [weak self] result in
+                guard let self = self else { return }
+
+                switch result {
+                case .success(let photo):
+                    NSLog("[WallSpan] Got photo by %@, fetching thumbnail", photo.photographer)
+                    self.downloadThumbnail(for: photo)
+                case .failure(let error):
+                    DispatchQueue.main.async {
+                        self.isLoading = false
+                        self.lastError = "Error: \(error.localizedDescription)"
+                    }
                 }
             }
         }
@@ -214,10 +323,36 @@ class StatusBarController: NSObject, NSMenuDelegate {
                 return
             }
             DispatchQueue.main.async {
-                self.addPreview(PhotoPreview(photo: photo, thumbnail: image))
+                self.addPreview(PhotoPreview(photos: [photo], thumbnails: [image]))
                 self.isLoading = false
             }
         }.resume()
+    }
+
+    private func downloadThumbnails(for photos: [UnsplashPhoto], completion: @escaping ([NSImage]?) -> Void) {
+        let group = DispatchGroup()
+        var thumbnails: [Int: NSImage] = [:]
+
+        for (index, photo) in photos.enumerated() {
+            group.enter()
+            URLSession.shared.dataTask(with: photo.thumbnailURL) { data, _, _ in
+                defer { group.leave() }
+                if let data = data, let image = NSImage(data: data) {
+                    DispatchQueue.main.async {
+                        thumbnails[index] = image
+                    }
+                }
+            }.resume()
+        }
+
+        group.notify(queue: .main) {
+            let sorted = (0..<photos.count).compactMap { thumbnails[$0] }
+            if sorted.count == photos.count {
+                completion(sorted)
+            } else {
+                completion(nil)
+            }
+        }
     }
 
     private func addPreview(_ preview: PhotoPreview) {
@@ -268,33 +403,61 @@ class StatusBarController: NSObject, NSMenuDelegate {
         lastError = nil
         refreshMenu()
 
-        NSLog("[WallSpan] Fetching preview...")
-        unsplashService.fetchRandomPhoto { [weak self] result in
-            guard let self = self else { return }
+        if Preferences.shared.displayMode == .individual {
+            let screenCount = NSScreen.screens.count
+            NSLog("[WallSpan] Fetching %d previews for individual mode...", screenCount)
+            unsplashService.fetchMultiplePhotos(count: screenCount) { [weak self] result in
+                guard let self = self else { return }
 
-            switch result {
-            case .success(let photo):
-                NSLog("[WallSpan] Got photo by %@, fetching thumbnail", photo.photographer)
-                URLSession.shared.dataTask(with: photo.thumbnailURL) { [weak self] data, _, _ in
-                    guard let self = self, let data = data, let image = NSImage(data: data) else {
-                        DispatchQueue.main.async {
-                            self?.isLoading = false
-                            self?.lastError = "Failed to load thumbnail"
-                            self?.refreshMenu()
+                switch result {
+                case .success(let photos):
+                    NSLog("[WallSpan] Got %d photos, fetching thumbnails", photos.count)
+                    self.downloadThumbnails(for: photos) { thumbnails in
+                        if let thumbnails = thumbnails {
+                            self.addPreview(PhotoPreview(photos: photos, thumbnails: thumbnails))
+                        } else {
+                            self.lastError = "Failed to load thumbnails"
                         }
-                        return
-                    }
-                    DispatchQueue.main.async {
-                        self.addPreview(PhotoPreview(photo: photo, thumbnail: image))
                         self.isLoading = false
                         self.refreshMenu()
                     }
-                }.resume()
-            case .failure(let error):
-                DispatchQueue.main.async {
-                    self.isLoading = false
-                    self.lastError = "Error: \(error.localizedDescription)"
-                    self.refreshMenu()
+                case .failure(let error):
+                    DispatchQueue.main.async {
+                        self.isLoading = false
+                        self.lastError = "Error: \(error.localizedDescription)"
+                        self.refreshMenu()
+                    }
+                }
+            }
+        } else {
+            NSLog("[WallSpan] Fetching preview...")
+            unsplashService.fetchRandomPhoto { [weak self] result in
+                guard let self = self else { return }
+
+                switch result {
+                case .success(let photo):
+                    NSLog("[WallSpan] Got photo by %@, fetching thumbnail", photo.photographer)
+                    URLSession.shared.dataTask(with: photo.thumbnailURL) { [weak self] data, _, _ in
+                        guard let self = self, let data = data, let image = NSImage(data: data) else {
+                            DispatchQueue.main.async {
+                                self?.isLoading = false
+                                self?.lastError = "Failed to load thumbnail"
+                                self?.refreshMenu()
+                            }
+                            return
+                        }
+                        DispatchQueue.main.async {
+                            self.addPreview(PhotoPreview(photos: [photo], thumbnails: [image]))
+                            self.isLoading = false
+                            self.refreshMenu()
+                        }
+                    }.resume()
+                case .failure(let error):
+                    DispatchQueue.main.async {
+                        self.isLoading = false
+                        self.lastError = "Error: \(error.localizedDescription)"
+                        self.refreshMenu()
+                    }
                 }
             }
         }
@@ -313,43 +476,28 @@ class StatusBarController: NSObject, NSMenuDelegate {
         isLoading = true
         lastError = nil
 
-        if Preferences.shared.displayMode == .individual {
-            // Individual mode: fetch separate images for each monitor
-            let screenCount = NSScreen.screens.count
-            NSLog("[WallSpan] Individual mode: fetching %d images for %d monitors", screenCount, screenCount)
+        if preview.isMultiple {
+            // Individual mode: apply the previewed images
+            let urls = preview.photos.map { $0.imageURL }
+            let credits = preview.photos.map { $0.photographer }.joined(separator: ", ")
+            NSLog("[WallSpan] Applying %d previewed wallpapers", preview.photos.count)
 
-            unsplashService.fetchMultiplePhotos(count: screenCount) { [weak self] result in
-                guard let self = self else { return }
-
-                switch result {
-                case .success(let photos):
-                    let urls = photos.map { $0.imageURL }
-                    let credits = photos.map { $0.photographer }.joined(separator: ", ")
-                    NSLog("[WallSpan] Applying %d wallpapers", photos.count)
-
-                    self.wallpaperManager.applyIndividualWallpapers(from: urls) { error in
-                        DispatchQueue.main.async {
-                            self.isLoading = false
-                            if let error = error {
-                                NSLog("[WallSpan] Wallpaper error: %@", error.localizedDescription)
-                                self.lastError = "Error: \(error.localizedDescription)"
-                            } else {
-                                NSLog("[WallSpan] Wallpapers set successfully")
-                                self.appliedCredit = credits
-                            }
-                        }
-                    }
-                case .failure(let error):
-                    DispatchQueue.main.async {
-                        self.isLoading = false
-                        self.lastError = "Error: \(error.localizedDescription)"
+            wallpaperManager.applyIndividualWallpapers(from: urls) { [weak self] error in
+                DispatchQueue.main.async {
+                    self?.isLoading = false
+                    if let error = error {
+                        NSLog("[WallSpan] Wallpaper error: %@", error.localizedDescription)
+                        self?.lastError = "Error: \(error.localizedDescription)"
+                    } else {
+                        NSLog("[WallSpan] Wallpapers set successfully")
+                        self?.appliedCredit = credits
                     }
                 }
             }
         } else {
             // Span mode: single image across all monitors
-            NSLog("[WallSpan] Span mode: applying wallpaper by %@", preview.photo.photographer)
-            wallpaperManager.applyWallpaper(from: preview.photo.imageURL) { [weak self] error in
+            NSLog("[WallSpan] Span mode: applying wallpaper by %@", preview.primaryPhoto.photographer)
+            wallpaperManager.applyWallpaper(from: preview.primaryPhoto.imageURL) { [weak self] error in
                 DispatchQueue.main.async {
                     self?.isLoading = false
                     if let error = error {
@@ -357,7 +505,7 @@ class StatusBarController: NSObject, NSMenuDelegate {
                         self?.lastError = "Error: \(error.localizedDescription)"
                     } else {
                         NSLog("[WallSpan] Wallpaper set successfully")
-                        self?.appliedCredit = preview.photo.photographer
+                        self?.appliedCredit = preview.primaryPhoto.photographer
                     }
                 }
             }
@@ -379,9 +527,11 @@ class StatusBarController: NSObject, NSMenuDelegate {
                 case .success(let photos):
                     let urls = photos.map { $0.imageURL }
                     let credits = photos.map { $0.photographer }.joined(separator: ", ")
-                    // Add first photo to buffer for preview history
-                    if let first = photos.first {
-                        self.downloadThumbnail(for: first)
+                    // Add to buffer for preview history
+                    self.downloadThumbnails(for: photos) { thumbnails in
+                        if let thumbnails = thumbnails {
+                            self.addPreview(PhotoPreview(photos: photos, thumbnails: thumbnails))
+                        }
                     }
                     self.wallpaperManager.applyIndividualWallpapers(from: urls) { error in
                         DispatchQueue.main.async {
